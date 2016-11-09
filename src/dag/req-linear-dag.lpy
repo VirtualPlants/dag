@@ -1,0 +1,327 @@
+import sys
+import numpy as np
+import matplotlib.pyplot as plt
+
+import dags2 ; reload(dags2)
+from dags2 import *
+
+# computes the number of nodes in
+# a linear DAG (t, n)
+# at height h for all h.
+# the computation is carried out backward from leaves to tree root
+
+def compute_nb_node(dag):
+    nb_nodes = {}
+    for ni in dag.nodes():
+      nb_nodes[ni] = 1
+    for ni, nj in dag.postorder_edge_traversal():
+      w = dag.edge_weigth(ni,nj)
+      nb_nodes[ni] += nb_nodes[nj] * w
+    
+    dag.set_node_property('nb_nodes', nb_nodes )
+    return nb_nodes
+
+
+# computes the equivalent resistance for
+# a linear DAG (t, n)
+# at height h
+# for local resistance array r
+# and array of already computed equivalent resistances eqr
+
+def compute_eqr_at_height(h, dag, eqresistance, resistance):
+    sons = dag.children(h)
+    if dag.nb_children(h) == 0:
+        return resistance[h]
+    else:
+        cap = 0.
+        for son in dag.children(h):
+            cap += dag.edge_weigth(h,son)/eqresistance[son]
+        return resistance[h] + 1/cap
+
+
+# computes the equivalent resistances of 
+# the linear dag defined by (t,n)
+# with local resistance array r
+# and computed equivalent resistances array eqr 
+# (that is filled by the function as it proceeds)
+
+def compute_eqr( dag, resistance ):
+    eqresistance = {}
+    for h in dag.postorder_node_traversal():
+      eqresistance[h] = compute_eqr_at_height(h, dag, eqresistance, resistance)
+    return eqresistance
+
+
+# computes (at every height h) 
+# the flow f, hydraulic potential pot, and equivalent resistance eqr 
+# of the linear dag defined by (t,n) and
+# submitted to a global potential difference delta_pot given as an input
+# with local resistance array r 
+# Note: the equivalent resistances array eqr is computed by the function first
+
+def compute_flow(dag, pot_root, pot_leaf):
+    delta_pot = pot_root - pot_leaf
+    
+    assert dag.node_properties().has_key('resistance')
+    
+    eqr = compute_eqr(dag, dag.node_property('resistance'))
+    dag.set_node_property('eqresistance', eqr )
+    
+    ndag = dag.get_tree()
+    eqr = ndag.node_property('eqresistance')
+    r = ndag.node_property('resistance')
+    
+    deltapotentials = {} 
+    f = {}
+    for i in ndag.preorder_node_traversal():
+        parents = ndag.parents(i)
+        nbparents = len(parents)
+        assert len(parents) in [0,1]
+        if nbparents == 0:
+          toppotential = delta_pot
+        else:
+          toppotential = deltapotentials[parents[0]]
+        f[i] = toppotential / eqr[i]  # computes and record flow
+        deltapotentials[i] = toppotential - f[i] * r[i]   # computes hydraulic potential difference
+    
+    potentials = dict([(vid,pot_leaf+dp) for vid,dp in deltapotentials.items()])
+    ndag.set_node_property('flow', f )
+    ndag.set_node_property('hydropotential', potentials )
+    
+    return ndag, eqr, f, potentials
+
+rarray = r22
+
+# Selection of a profile of local resistances:
+# from r1 to r5
+for dag in [dag1, dag2, dag3]:
+  dag.set_node_property('resistance', dict(enumerate(rarray)))
+
+# definition of hydraulic potentials at the collar (high for a root system)
+# and at the plant tips (low for a root system)
+pot_root = 0
+pot_leaf = -LEAFABSPOTENTIAL
+
+# Computes the equivalent resistances of DAG (t,n) 
+# with local segment resistances rarray
+
+# flow1 : flow at different height of the tree
+# pot1  : hydraulic potential at different height of the tree
+
+if not INTERACTIVE:
+  dag1, eqresistances1, flow1, pot1 = compute_flow(dag1, delta_pot)
+  dag2, eqresistances2, flow2, pot2 = compute_flow(dag2, delta_pot)
+  dag3, eqresistances3, flow3, pot3 = compute_flow(dag3, delta_pot)
+else:
+  #dag = DAG.generate(DEPTH, ORDER)
+  #dag = DAG.generate_random(DEPTH, (1,ORDER), (1,2), DEPTH)
+  dag = dag2
+  
+  nbnodes = float(len(dag.nodes()))-1
+  resistance = [(n,min(max(RESISTANCE(n/nbnodes),0),1)) for n in dag.nodes()]
+  dag.set_node_property('resistance',dict(resistance))
+  
+  ndag, eqresistances, flow, pot = compute_flow(dag, pot_root, pot_leaf)
+  odag, dag = dag, ndag
+
+#eqresistances4, flow4, pot4 =  compute_flow(t4, n4, rarray, delta_pot)
+#eqresistances5, flow5, pot5 = compute_flow(t5, n5, rarray, delta_pot)
+if WITH_MATPLOTLIB:
+  fig = plt.figure(0)
+  plt.clf()
+  
+  def mplot(dictvalues, *args, **kwd):
+    items = dictvalues.items()
+    items.sort()
+    plt.plot([x for x,y in items],[y for x,y in items],*args, **kwd)
+  
+  if not INTERACTIVE:
+    mplot(eqresistances1, "o", color='r', linestyle='dashed', linewidth=2)
+    mplot(eqresistances2, "v", color='g', linestyle='dashed', linewidth=2)
+    mplot(eqresistances3, "s", color='b', linestyle='dashed', linewidth=2)
+  else:
+    mplot(eqresistances, "o", color='r', linestyle='dashed', linewidth=2)
+    
+  plt.xlabel('Depth')
+  plt.title('Equivalent resistances (Left=root - Right=leaves)')
+  
+  plt.figure(5)
+  plt.clf()
+  if not INTERACTIVE:
+    mplot(flow1, "o", color='r', linestyle='dashed', linewidth=2)
+    mplot(flow2, "v", color='g', linestyle='dashed', linewidth=2)
+    mplot(flow3, "s", color='b', linestyle='dashed', linewidth=2)
+  else:
+    mplot(flow, "o", color='r', linestyle='dashed', linewidth=2)
+  
+  plt.xlabel('Depth')
+  plt.title('Flows (Left=root - Right=leaves)')
+  
+  plt.figure(7)
+  plt.clf()
+  
+  if not INTERACTIVE:
+    mplot(pot1, "o", color='r', linestyle='dashed', linewidth=2)
+    mplot(pot2, "v", color='g', linestyle='dashed', linewidth=2)
+    mplot(pot3, "s", color='b', linestyle='dashed', linewidth=2)
+  else:
+    mplot(pot, "o", color='r', linestyle='dashed', linewidth=2)
+     
+  plt.xlabel('Depth')
+  plt.title('Hydraulic Potential (Left=root - Right=leaves)')
+  
+  plt.show()
+  
+props = {0:'hydropotential', 1 : 'flow', 2: 'eqresistance', 3 : 'nb_nodes'}
+prop = props[PLOT3DPROPERTY]
+
+if not INTERACTIVE:
+  if PLOT3DPROPERTY:
+    for dag in [dag1, dag2, dag3]:
+      nbn = compute_nb_node(dag)
+else:
+      nbn = compute_nb_node(dag)
+
+Axiom : 
+  if INTERACTIVE:
+    global dag, eqresistances, pot, flow
+    nproduce @g(dag.interpret(colorproperty=prop))
+    d = 0.5
+    strictlylinear = odag.is_strictlylinear()
+    if not strictlylinear:
+      noriginalid = dag.node_property('idmap')
+      eqresistances = odag.node_property('eqresistance')
+      pot = [(noriginalid[vid], value) for vid, value in pot.items()]
+      flow = [(noriginalid[vid], value) for vid, value in flow.items()]
+      
+    plotCurve(eqresistances, eqresistances, pos=(-0.9,-0.85), dim = (d,d))
+    nproduce SetColor(0,0,0) @2D @M(-0.9,-0.97) @L('Equivalent Resistance (Left=root - Right=leaves)')
+    
+    plotCurve(pot if strictlylinear else None, pot, pos=(-0.3,-0.85), dim = (d,d))
+    nproduce SetColor(0,0,0) @2D @M(-0.1,-0.97) @L('Hydraulic Potential')
+    
+    plotCurve(flow if strictlylinear else None, flow, pos=(0.3,-0.85), dim = (d,d), yextend=(0,100))
+    nproduce SetColor(0,0,0) @2D @M(0.6,-0.97) @L('Flow')
+    
+    nproduce @2D SetColor(0,0,0) @M(-0.8,-0.1) @L('Nb nodes : '+str(nbn[dag.root]), 12)
+  else:
+    minvalue = 1e100
+    maxvalue = -1e100
+    for dag in [dag1, dag2, dag3]:
+      v = dag.node_property(prop).values()
+      mvalue = max(v)
+      if mvalue > maxvalue: maxvalue = mvalue
+      mvalue = min(v)
+      if mvalue < minvalue: minvalue = mvalue
+      
+    for dag in [dag1, dag2, dag3]:
+      nproduce @g(dag.interpret(colorproperty=prop,bounds=( minvalue, maxvalue))) MoveRel(0,-20,0)
+  nproduce @2D SetColor(0,0,0) @M(-0.8,0.2) @L(prop.capitalize(), 12)
+
+
+def plotCurve(curvedata, pointdata = None, xextend = None, yextend = None, pos = (0.1,-0.3), dim = (0.8,0.8), xtick = None, ytick = None, withorigin = True ):
+  if LPY_VERSION_MAJOR < 2 or (LPY_VERSION_MAJOR == 2 and LPY_VERSION_MINOR < 4):
+    import warnings
+    warnings.warn("Your version of lpy do not allow 2D plot")
+    return
+  from math import ceil, floor, log
+  from openalea.plantgl.all import Polyline2D
+  
+  if type(curvedata) == tuple:
+    curvedata = zip(curvedata[0],curvedata[1])
+  elif type(curvedata) == dict:
+    curvedata = curvedata.items()
+    curvedata.sort()
+  if type(pointdata) == tuple:
+    pointdata = zip(pointdata[0],pointdata[1])
+  elif type(pointdata) == dict:
+    pointdata = pointdata.items()
+    pointdata.sort()
+  data = []
+  if not curvedata is None:
+    data += list(curvedata)
+  if not pointdata is None:
+    data += pointdata
+  if len(data) > 1:
+    if xextend:
+      minx, maxx = xextend
+    else :
+      minx = floor(min([x for x,y in data]))
+      maxx = ceil(max([x for x,y in data]))
+    if yextend:
+      miny, maxy = yextend
+    else :
+      miny = floor(min([y for x,y in data]))
+      maxy = ceil(max([y for x,y in data]))
+    if withorigin:
+      maxx = max(0,maxx)
+      minx = min(0,minx)
+      maxy = max(0,maxy)
+      miny = min(0,miny)
+    xext = maxx - minx
+    yext = maxy - miny
+    x2Dlength, y2Dlength = dim
+    projx = lambda x: (x2Dlength*(x-minx)/xext)
+    projy = lambda y: (y2Dlength*(y-miny)/yext)
+    if xtick is None:
+      nbdigit = round(log(xext,10))
+      xtick = 10**(nbdigit-1)
+    if ytick is None:
+      nbdigit = round(log(yext,10))
+      ytick = 10**(nbdigit-1)
+    if not curvedata is None:
+      curvedata = [(projx(x),projy(y)) for x,y in curvedata]
+    ticklength = 0.02
+    
+    nproduce [ @2D SetColor(255,0,0) @M(pos[0],pos[1]) @R 
+    if not curvedata is None:
+      nproduce @g(Polyline2D(curvedata,width=2))
+    if not pointdata is None:
+      nproduce SetColor(255,0,255)
+      for x,y in pointdata:
+        nproduce [ @M(pos[0]+projx(x),pos[1]+projy(y)) @O(0.012)]
+    if miny <= 0 <= maxy:
+      nproduce SetColor(0,255,0) @g(Polyline2D([(projx(minx),projy(0)),(projx(maxx),projy(0))]))
+      cxtick = ((minx // xtick) * xtick)
+      if cxtick < minx : cxtick += xtick
+      while cxtick <= maxx:
+        if cxtick != 0:
+          nproduce @g(Polyline2D([(projx(cxtick),projy(0)-ticklength),(projx(cxtick),projy(0)+ticklength)]))
+        cxtick += xtick
+      xlabeldecal = 0.005
+      ylabeldecal = 0.02
+      xtagorient = -1 if maxy <= 0 else 1
+      ytagorient = -1 if maxx <= 0 else 1
+      nproduce [MoveRel(projx(0)- xlabeldecal/2, projy(0)- xtagorient * ( 2 *ticklength + xlabeldecal)) SetColor(0,0,0) @L(str(minx))]
+      nproduce [MoveRel(projx(maxx)- xlabeldecal/2, projy(0)- xtagorient * (2 *ticklength + xlabeldecal)) SetColor(0,0,0) @L(str(maxx))]
+      nproduce [MoveRel(projx(0) - ytagorient * (2 *ticklength + ylabeldecal), projy(miny) - ylabeldecal/2) SetColor(0,0,0) @L(str(miny))]
+      nproduce [MoveRel(projx(0) - ytagorient * (2 *ticklength + ylabeldecal), projy(maxy) - ylabeldecal/2) SetColor(0,0,0) @L(str(maxy))]
+    if minx <= 0 <= maxx:
+      nproduce SetColor(0,0,255) @g(Polyline2D([(projx(0),projy(miny)),(projx(0),projy(maxy))]))
+      cytick = ((miny // ytick)*ytick)
+      if cytick < miny : cytick += ytick
+      while cytick <= maxy:
+        if cytick != 0:
+          nproduce @g(Polyline2D([(projx(0)-ticklength,projy(cytick)),(projx(0)+ticklength,projy(cytick))]))
+        cytick += ytick
+    nproduce ]
+###### INITIALISATION ######
+
+__lpy_code_version__ = 1.1
+
+def __initialiseContext__(context):
+	scalars = [('INTERACTIVE', 'Bool', True), ('DEPTH', 'Integer', 10, 5, 15), ('ORDER', 'Integer', 3, 1, 4), ('PLOT3DPROPERTY', 'Integer', 2, 0, 3), ('WITH_MATPLOTLIB', 'Bool', False), ('LEAFABSPOTENTIAL', 'Integer', 10, 5, 20)]
+	context["__scalars__"] = scalars
+	for s in scalars:
+		if not s[1] == "Category" : context[s[0]] = s[2]
+	import openalea.plantgl.all as pgl
+	RESISTANCE = pgl.NurbsCurve2D(	
+	    ctrlPointList = pgl.Point3Array([(0, 0.191924, 1),(0.207618, 0.0296175, 1),(0.287972, 0.0647133, 1),(0.50493, 0.0404032, 1),(0.755533, 0.046519, 1),(1, 0.0495606, 1)]) , 
+	    )
+	RESISTANCE.name = "RESISTANCE"
+	panel_0 = ({'active': True, 'visible': True, 'name': 'Panel 1'},[('Function',RESISTANCE)])
+	parameterset = [panel_0,]
+	context["__functions__"] = [('RESISTANCE',RESISTANCE),]
+	context["__curves__"] = []
+	context["__parameterset__"] = parameterset
+	context["RESISTANCE"] = pgl.QuantisedFunction(RESISTANCE)
